@@ -59,3 +59,151 @@ export async function loadOverview(): Promise<OverviewResult> {
   if (!response.ok) throw new Error('运营概览读取失败')
   return await response.json()
 }
+
+// ── 洞察发布 / 字段授权 / 采样归档 ──
+// 返回结构保留后端的三层信息：发布版本（项目、归属、授权版本）、获准采样
+// 字段清单、以及按字段回查洞察版本用的归档来源。
+
+export type PublicationRecord = {
+  publication_id: number
+  publication_version: number
+  result_id: number
+  insight_version: string
+  project: string
+  owner: string
+  shared_project: boolean
+  auth_version: number
+  approved_fields: string[]
+  requested_fields?: string[]
+  unauthorized_fields?: string[]
+  sampling_purpose: string
+  sample_snapshot?: Record<string, unknown>[]
+}
+
+export type SamplingArchive = {
+  archive_id: number
+  publication_id: number
+  publication_version: number
+  result_id: number
+  insight_id: number
+  insight_version: string
+  project: string
+  owner: string
+  auth_version: number
+  fields_used: string[]
+  field_sources: Record<string, Record<string, unknown>>
+  sample_count: number
+  null_rate: Record<string, number>
+  cluster_stats?: { field: string; counts: Record<string, number> }
+}
+
+export type PublishResult = PublicationRecord & {
+  ok: boolean
+  error?: string
+  message: string
+  source_id: number
+  source?: Record<string, unknown>
+  publication?: PublicationRecord
+}
+
+export type SampleResult = {
+  ok: boolean
+  error?: string
+  message: string
+  publication_id: number
+  project: string
+  insight_version: string
+  auth_version: number
+  approved_fields: string[]
+  fields_used: string[]
+  field_sources: Record<string, Record<string, unknown>>
+  sample_count: number
+  samples: Record<string, unknown>[]
+  null_rate: Record<string, number>
+  archive_id: number
+  archive: SamplingArchive
+}
+
+export type ClusterResult = {
+  ok: boolean
+  allowed?: boolean
+  error?: string
+  message: string
+  publication_id: number
+  auth_version: number
+  approved_fields: string[]
+  groups?: Record<string, number>
+}
+
+export async function publishInsight(
+  resultId: number,
+  payload: {
+    project: string
+    authorized_fields?: string[]
+    sampling_purpose?: string
+    owner?: string
+    shared_project?: boolean
+  },
+): Promise<PublishResult> {
+  const response = await request(`/api/mining_result/${resultId}/publish`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return await response.json()
+}
+
+export async function listPublications(
+  resultId?: number,
+  project?: string,
+): Promise<{ ok: boolean; items: PublicationRecord[]; total: number }> {
+  const query = new URLSearchParams()
+  if (resultId !== undefined) query.set('result_id', String(resultId))
+  if (project) query.set('project', project)
+  const response = await request(`/api/mining_result/publications?${query.toString()}`)
+  return await response.json()
+}
+
+export async function samplePublication(
+  publicationId: number,
+  sourceId?: number,
+): Promise<SampleResult> {
+  const response = await request(`/api/mining_result/publications/${publicationId}/sample`, {
+    method: 'POST',
+    body: JSON.stringify({ source_id: sourceId ?? null }),
+  })
+  return await response.json()
+}
+
+export async function clusterPublication(
+  publicationId: number,
+  sourceId?: number,
+): Promise<ClusterResult> {
+  const response = await request(`/api/mining_result/publications/${publicationId}/cluster`, {
+    method: 'POST',
+    body: JSON.stringify({ source_id: sourceId ?? null, field: 'cluster_label' }),
+  })
+  return await response.json()
+}
+
+export async function listArchives(params: {
+  sourceId?: number
+  publicationId?: number
+  field?: string
+}): Promise<{ ok: boolean; items: SamplingArchive[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params.sourceId !== undefined) query.set('source_id', String(params.sourceId))
+  if (params.publicationId !== undefined) query.set('publication_id', String(params.publicationId))
+  if (params.field) query.set('field', params.field)
+  const response = await request(`/api/mining_result/archives?${query.toString()}`)
+  return await response.json()
+}
+
+export async function traceInsightVersion(archiveId: number): Promise<{
+  ok: boolean
+  insight_version: string
+  publication_id: number
+  fields_used: string[]
+}> {
+  const response = await request(`/api/mining_result/archives/${archiveId}/trace`)
+  return await response.json()
+}

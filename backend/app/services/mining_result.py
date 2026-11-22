@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services import insight_publication
 from app.services.base import BaseModuleService
 from app.store import store
 
@@ -18,6 +19,163 @@ class MiningResultService(BaseModuleService):
     NEGATIVE_ACTIONS = []
 
     # ── 链路4: 预测 → 挖掘结果 ──
+    # ── 洞察发布: 授权检查 → 发布版本 → 特征源取样/分群 ──
+    def register_insight_samples(
+        self,
+        result_id: int | None = None,
+        samples: list[dict[str, Any]] | None = None,
+        *,
+        insight_id: int | None = None,
+        rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """登记洞察的参考样本，供发布后的普通取样与分群使用。"""
+        result_id = int(result_id if result_id is not None else (insight_id or 0))
+        if store.find(self.MODULE, result_id) is None:
+            return {"ok": False, "message": f"挖掘结果 {result_id} 不存在"}
+        return insight_publication.register_insight_samples(result_id, samples or rows or [])
+
+    def publish_insight(
+        self,
+        result_id: int | None = None,
+        project: str | None = None,
+        *,
+        target_project: str | None = None,
+        project_id: str | None = None,
+        authorized_fields: Any = None,
+        fields: Any = None,
+        approved_fields: Any = None,
+        sampling_purpose: str = "普通取样",
+        purpose: str | None = None,
+        owner: str | None = None,
+        insight_owner: str | None = None,
+        shared_project: bool = False,
+        auth_version: int | None = None,
+        source_name: str | None = None,
+        insight_id: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """把洞察发布给目标项目：先按项目与采样用途校验字段权限，再冻结发布版本。"""
+        result_id = result_id if result_id is not None else kwargs.get("result_id", insight_id)
+        project = project or target_project or project_id or kwargs.get("target")
+        requested = authorized_fields
+        for candidate in (fields, approved_fields, kwargs.get("sampling_fields")):
+            if requested is None:
+                requested = candidate
+        return insight_publication.publish(
+            int(result_id or 0),
+            str(project or ""),
+            authorized_fields=requested,
+            sampling_purpose=purpose or sampling_purpose,
+            owner=owner if owner is not None else insight_owner,
+            shared_project=shared_project,
+            auth_version=auth_version,
+            source_name=source_name,
+        )
+
+    def list_insight_publications(
+        self,
+        result_id: int | None = None,
+        project: str | None = None,
+        *,
+        insight_id: int | None = None,
+        target_project: str | None = None,
+    ) -> dict[str, Any]:
+        """列出洞察的发布版本，包含目标项目、洞察归属与授权版本。"""
+        result_id = result_id if result_id is not None else insight_id
+        rows = insight_publication.list_publications(
+            result_id=result_id, project=project or target_project)
+        return {"ok": True, "items": rows, "total": len(rows)}
+
+    def sample_published_insight(
+        self,
+        publication_id: int | None = None,
+        *,
+        source_id: int | None = None,
+    ) -> dict[str, Any]:
+        """按发布版本的获准采样字段清单取样，并归档字段来源。"""
+        return insight_publication.sample_publication(int(publication_id or 0), source_id=source_id)
+
+    def cluster_published_insight(
+        self,
+        publication_id: int | None = None,
+        field: str | None = None,
+        *,
+        source_id: int | None = None,
+    ) -> dict[str, Any]:
+        """分群前先判定该发布版本的字段权限。"""
+        return insight_publication.cluster_publication(
+            int(publication_id or 0), field or insight_publication.CLUSTER_FIELD, source_id=source_id)
+
+    def list_sampling_archives(
+        self,
+        *,
+        publication_id: int | None = None,
+        source_id: int | None = None,
+        field: str | None = None,
+        result_id: int | None = None,
+        insight_id: int | None = None,
+    ) -> dict[str, Any]:
+        """按发布/来源/字段查询历史采样归档。"""
+        rows = insight_publication.list_archives(
+            publication_id=publication_id, source_id=source_id,
+            field=field, result_id=result_id if result_id is not None else insight_id,
+        )
+        return {"ok": True, "items": rows, "total": len(rows)}
+
+    def trace_insight_version(
+        self,
+        *,
+        archive_id: int | None = None,
+        field: str | None = None,
+        source_id: int | None = None,
+        publication_id: int | None = None,
+    ) -> dict[str, Any]:
+        """按归档里的字段回查发布时使用的洞察版本。"""
+        return insight_publication.trace_insight_version(
+            archive_id=archive_id, field=field,
+            source_id=source_id, publication_id=publication_id,
+        )
+
+    def update_project_authorization(
+        self,
+        project: str,
+        fields: Any = None,
+        *,
+        authorized_fields: Any = None,
+        approved_fields: Any = None,
+        sampling_purpose: str = "普通取样",
+        purpose: str | None = None,
+        shared_project: bool = False,
+        auth_version: int | None = None,
+    ) -> dict[str, Any]:
+        """调整目标项目的字段授权；字段变化时授权版本自动递增。"""
+        if fields is None:
+            fields = authorized_fields if authorized_fields is not None else approved_fields
+        row = insight_publication.update_project_authorization(
+            project, fields or [], sampling_purpose=purpose or sampling_purpose,
+            shared_project=shared_project, auth_version=auth_version,
+        )
+        return {"ok": True, "authorization": row}
+
+    def get_project_authorization(self, project: str) -> dict[str, Any]:
+        """读取目标项目当前的字段授权。"""
+        row = insight_publication.project_authorization(project)
+        if row is None:
+            return {"ok": False, "message": f"项目 {project} 尚无字段授权", "project": project}
+        return {"ok": True, "authorization": row}
+
+    def run_publication_demo(self, project: str = "P", result_id: int = 1) -> dict[str, Any]:
+        """演示两次发布、扩权、旧来源受限与旧归档回查的完整场景。"""
+        return insight_publication.run_demo(project=project, result_id=result_id)
+
+    # 常用别名：外部调用方按“发布 / 取样 / 分群 / 授权”直觉命名也能命中。
+    publish = publish_insight
+    publish_to_project = publish_insight
+    sample = sample_published_insight
+    cluster = cluster_published_insight
+    authorize_project = update_project_authorization
+    archives = list_sampling_archives
+
     def export_insights_to_labels(self, result_id: int) -> dict[str, Any]:
         """将挖掘结果的关键发现导出到业务场景标注模块，形成可复用的场景规则。"""
         result = store.find(self.MODULE, result_id)

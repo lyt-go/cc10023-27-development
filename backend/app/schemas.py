@@ -29,3 +29,41 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class InsightPublishPayload(BaseModel):
+    """洞察发布：目标项目、采样用途与本次申请的授权字段。"""
+
+    project: str | None = None
+    target_project: str | None = None
+    authorized_fields: list[str] | str | None = None
+    auth_fields: list[str] | str | None = None
+    sampling_purpose: str = "普通取样"
+    owner: str | None = None
+    shared_project: bool = False
+    auth_version: int | None = None
+    source_name: str | None = None
+    remark: str | None = None
+
+
+class SampleRegistrationPayload(BaseModel):
+    samples: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SamplePayload(BaseModel):
+    """取样/分群：可选指定来源，未指定时按发布版本读取。"""
+
+    source_id: int | None = None
+    field: str | None = None
+    sampling_purpose: str = "普通取样"
+
+
+class SourceSamplePayload(BaseModel):
+    sampling_purpose: str = "普通取样"
+    field: str | None = None
+
+
+class ClusterPayload(BaseModel):
+    field: str = "cluster_label"
+    source_id: int | None = None
+

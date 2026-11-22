@@ -411,7 +411,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '关键分群': '挖掘结果管理样例1',
   '置信度': '挖掘结果管理样例1',
   '结果文件': '挖掘结果管理样例1',
-  '结果版本': '挖掘结果管理样例1'},
+  '结果版本': 'v1.0.0'},
  {'id': 2,
   'status': '审核中',
   'pending': True,
@@ -423,7 +423,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '关键分群': '挖掘结果管理样例2',
   '置信度': '挖掘结果管理样例2',
   '结果文件': '挖掘结果管理样例2',
-  '结果版本': '挖掘结果管理样例2'},
+  '结果版本': 'v1.1.0'},
  {'id': 3,
   'status': '已采纳',
   'pending': False,
@@ -435,7 +435,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '关键分群': '挖掘结果管理样例3',
   '置信度': '挖掘结果管理样例3',
   '结果文件': '挖掘结果管理样例3',
-  '结果版本': '挖掘结果管理样例3'}],
+  '结果版本': 'v1.2.0'}],
     "cluster_config": [{'id': 1,
   'status': '草稿',
   'pending': True,
@@ -651,5 +651,14 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '标注时间': '2026-09-03',
   '标注人': '业务场景标注样例3',
   '标注状态': '业务场景标注样例3',
-  '场景版本': '业务场景标注样例3'}]
+  '场景版本': '业务场景标注样例3'}],
+    # 洞察参考样本：A 群两条（其中一条 confidence 为空）、B 群一条。
+    "insight_sample": [
+        {'id': 1, 'result_id': 1, 'insight_id': 1,
+         'cluster_label': 'A', 'confidence': 0.92, 'insight_score': 0.81},
+        {'id': 2, 'result_id': 1, 'insight_id': 1,
+         'cluster_label': 'A', 'confidence': None, 'insight_score': 0.64},
+        {'id': 3, 'result_id': 1, 'insight_id': 1,
+         'cluster_label': 'B', 'confidence': 0.78, 'insight_score': 0.72},
+    ],
 }

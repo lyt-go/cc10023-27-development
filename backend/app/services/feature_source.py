@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services import insight_publication as publication
 from app.services.base import BaseModuleService
 from app.store import store
 
@@ -23,6 +24,9 @@ class FeatureSourceService(BaseModuleService):
         source = store.find(self.MODULE, source_id)
         if source is None:
             return {"ok": False, "message": f"特征源 {source_id} 不存在"}
+        published = publication.publication_for_source(source)
+        if published is not None:
+            return self.fetch_published_source_schema(source_id, published)
         discover_fields = ["id", "uid", "age", "income", "city", "label", "dt"]
         source["字段清单"] = ",".join(discover_fields)
         source["status"] = "已接入"
@@ -35,6 +39,111 @@ class FeatureSourceService(BaseModuleService):
             "fields": discover_fields,
             "message": f"特征源 {source_id} 已完成接入，发现 {len(discover_fields)} 个字段并同步至特征定义",
         }
+
+    def fetch_published_source_schema(
+        self,
+        source_id: int,
+        published: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """洞察衍生源只发现发布版本里获准采样的字段，不扩散到洞察的其他字段。"""
+        source = store.find(self.MODULE, source_id)
+        if source is None:
+            return {"ok": False, "message": f"特征源 {source_id} 不存在"}
+        published = published or publication.publication_for_source(source)
+        if published is None:
+            return {"ok": False, "message": f"特征源 {source_id} 没有关联的发布记录"}
+        fields = publication.normalize_fields(
+            published.get("approved_fields", published.get("sampling_fields"))
+        )
+        source["字段清单"] = ",".join(fields)
+        source["字段来源"] = "洞察发布"
+        source["status"] = "已接入"
+        source["pending"] = False
+        source["abnormal"] = False
+        return {
+            "ok": True,
+            "source_id": source_id,
+            "publication_id": published.get("id", published.get("publication_id")),
+            "publication_version": published.get("publication_version"),
+            "result_id": published.get("result_id"),
+            "insight_version": published.get("insight_version"),
+            "project": published.get("project"),
+            "auth_version": published.get("auth_version"),
+            "fields": fields,
+            "approved_fields": fields,
+            "获准采样字段清单": fields,
+            "message": (
+                f"特征源 {source_id} 按发布版本发现 {len(fields)} 个获准字段："
+                f"{','.join(fields) if fields else '无'}"
+            ),
+        }
+
+    def sample_published_source(
+        self,
+        source_id: int,
+        *,
+        sampling_purpose: str = "普通取样",
+        field: str | None = None,
+    ) -> dict[str, Any]:
+        """特征源取样：读取发布版本冻结的获准采样字段清单并归档。"""
+        source = store.find(self.MODULE, source_id)
+        if source is None:
+            return {"ok": False, "message": f"特征源 {source_id} 不存在"}
+        published = publication.publication_for_source(source)
+        if published is None:
+            return self.collect_source_snapshot(source_id)
+        publication_id = published.get("id", published.get("publication_id"))
+        if publication.CLUSTER_SAMPLING_PURPOSES & {str(sampling_purpose).casefold()} or (
+            field is not None and publication.normalize_field(field) == publication.CLUSTER_FIELD
+        ):
+            cluster = publication.cluster_publication(
+                publication_id,
+                field or publication.CLUSTER_FIELD,
+                source_id=source_id,
+            )
+            if not cluster.get("ok"):
+                return cluster
+        return publication.sample_publication(publication_id, source_id=source_id)
+
+    def cluster_published_source(
+        self,
+        source_id: int,
+        field: str = publication.CLUSTER_FIELD,
+    ) -> dict[str, Any]:
+        """用特征源上的发布版本做分群权限判定：旧来源永远只认发布时的授权。"""
+        source = store.find(self.MODULE, source_id)
+        if source is None:
+            return {"ok": False, "message": f"特征源 {source_id} 不存在"}
+        published = publication.publication_for_source(source)
+        if published is None:
+            return {"ok": False, "message": f"特征源 {source_id} 不是洞察发布源，无字段授权记录"}
+        return publication.cluster_publication(
+            published.get("id", published.get("publication_id")),
+            field,
+            source_id=source_id,
+        )
+
+    def published_source_archive(self, source_id: int) -> dict[str, Any]:
+        """按来源查询历史采样归档，权限变更后仍返回原发布版本的数据。"""
+        source = store.find(self.MODULE, source_id)
+        if source is None:
+            return {"ok": False, "message": f"特征源 {source_id} 不存在"}
+        archives = publication.list_archives(source_id=source_id)
+        return {
+            "ok": True,
+            "source_id": source_id,
+            "publication_id": source.get("publication_id"),
+            "publication_version": source.get("publication_version"),
+            "auth_version": source.get("授权版本"),
+            "items": archives,
+            "total": len(archives),
+        }
+
+    # 常用别名：取样/分群/归档/字段发现。
+    sample = sample_published_source
+    cluster = cluster_published_source
+    archives = published_source_archive
+    discover_published_fields = fetch_published_source_schema
 
     def _sync_cross_define(self, source_id: int, fields: list[str]) -> None:
         """将数据源发现的字段同步到特征定义模块，建立来源关联。"""
@@ -83,13 +192,20 @@ class FeatureSourceService(BaseModuleService):
         source = store.find(self.MODULE, source_id)
         if source is None:
             return {"ok": False}
+        if publication.publication_for_source(source) is not None:
+            # 洞察衍生源不能走通用快照逻辑，否则会把全部字段带进统计。
+            return self.sample_published_source(source_id)
         fields_list = (source.get("字段清单") or "").split(",") if source.get("字段清单") else []
         sample_ratio = source.get("采样比例", "0.1")
+        try:
+            ratio = float(str(sample_ratio).replace("%", "")) if sample_ratio else 0.1
+        except ValueError:
+            ratio = 0.1
         stats = {
             "source_id": source_id,
             "source_name": source.get("源名称", ""),
             "total_fields": len(fields_list),
-            "sample_ratio": float(str(sample_ratio).replace("%", "")) if sample_ratio else 0.1,
+            "sample_ratio": ratio,
             "collected_at": "2026-11-18T10:00:00",
             "row_count": 50000,
             "null_ratio": {f: round(i * 0.01, 4) for i, f in enumerate(fields_list)},

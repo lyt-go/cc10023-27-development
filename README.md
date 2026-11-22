@@ -16,7 +16,9 @@
 │   └── vite.config.ts        dev server 配置（open: false）
 ├── backend/                  FastAPI（Python） 后端
 │   ├── app/routers/resource.py  通用查询/导出/登记/动作接口
+│   ├── app/routers/insight.py   洞察发布/字段授权/取样归档接口
 │   ├── app/services/<key>.py    每个模块独立领域逻辑
+│   ├── app/services/insight_publication.py  洞察发布、字段授权与采样归档
 │   ├── app/services/base.py     共享服务骨架
 │   └── app/store.py          内存数据仓库与示例数据
 ├── .gitignore
@@ -76,6 +78,38 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 洞察发布与字段授权
+
+挖掘结果（洞察）发布给目标项目时，先按「目标项目 + 采样用途」校验字段权限，
+再把目标项目、洞察归属、授权版本、共享标记和**获准采样字段清单**冻结到发布
+记录里。发布同时生成一个洞察衍生特征源，其字段发现、取样与分群都只读这份
+发布版本；项目后续扩权不会反向改变旧来源和旧归档。
+
+| 接口 | 说明 |
+| --- | --- |
+| `PUT /api/mining_result/projects/{project}/authorization` | 按用途授权字段，字段变化时授权版本递增 |
+| `POST /api/mining_result/{result_id}/publish` | 发布洞察，返回发布版本、特征源与获准采样字段 |
+| `GET /api/mining_result/{result_id}/publications` | 列出该洞察的发布版本 |
+| `POST /api/mining_result/publications/{id}/sample` | 按获准采样字段清单取样并归档 |
+| `POST /api/mining_result/publications/{id}/cluster` | 分群前判定 `cluster_label` 权限 |
+| `GET /api/mining_result/archives?field=...` | 按归档里的字段回查 |
+| `GET /api/mining_result/archives/{id}/trace` | 回查发布时使用的洞察版本 |
+| `GET /api/feature_source/{id}/schema` | 特征源只发现发布版本的获准字段 |
+| `POST /api/feature_source/{id}/sample` \| `/cluster` | 沿用该来源的发布版本取样/分群 |
+
+演示场景（三条样本：A=2、B=1，其中一条 confidence 为空）：
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/api/mining_result/demo?project=P&result_id=1'
+```
+
+第一次只授权 `confidence`：发布成功，普通取样得到 3 条参考样本、confidence
+空值率 1/3，按 `cluster_label` 分群被拒绝且响应中不含任何分组指标。扩权后
+第二次发布得到 `A=2、B=1`；旧来源重试分群仍被拒绝，旧归档只有 confidence 的
+字段统计，并可按 confidence 回查到原洞察版本。
+
+前端入口：`/insight_publication`（洞察发布与授权）。
 
 领域：数据工程
 子方向：数据分析与数据应用
